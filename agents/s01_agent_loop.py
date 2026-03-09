@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Harness: the loop -- the model's first connection to the real world.
+# cspell:ignore dotenv
 """
 s01_agent_loop.py - The Agent Loop
 
@@ -39,27 +40,49 @@ except ImportError:
     pass
 
 from anthropic import Anthropic
+from anthropic.types import ToolParam
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
 if os.getenv("ANTHROPIC_BASE_URL"):
+    # print(os.getenv("ANTHROPIC_AUTH_TOKEN"))
     os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+    print(os.getenv("ANTHROPIC_BASE_URL"))
+    print(os.getenv("ANTHROPIC_AUTH_TOKEN"))
 
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
 SYSTEM = f"You are a coding agent at {os.getcwd()}. Use bash to solve tasks. Act, don't explain."
 
-TOOLS = [{
-    "name": "bash",
-    "description": "Run a shell command.",
-    "input_schema": {
-        "type": "object",
-        "properties": {"command": {"type": "string"}},
-        "required": ["command"],
-    },
-}]
+# ### 它是如何工作的？（Agent 流程）
+# 1. 用户输入 ：你对 AI 说：“请列出当前目录下的文件”。
+# 2. 模型思考 ：AI 接收到你的请求，同时看到了这个 TOOLS 定义。
+# 它会想：“用户的需求是列出文件，我看了一下我的工具箱，发现 bash 工具的描述是‘运行 Shell 命令’，这正好能解决用户的问题。”
+# 3. 模型输出 ：AI 不会 直接执行代码（它只是个在大脑里运行的文本生成器），而是返回一个特殊的结构化数据（Tool Use Request），类似于：
+# 4. 代码执行 ：你的 Python 脚本（ agent_loop 函数）会捕获到这个请求，提取出 ls -la ，然后调用真正的 subprocess.run 去执行它，最后把执行结果返还给 AI。
+# 总结 ：这段代码是连接 AI 大脑 和 计算机操作系统 的桥梁。没有它，AI 只能陪你聊天；有了它，AI 就能操作电脑。
+#
+# {
+#   "type": "tool_use",
+#   "name": "bash",
+#   "input": {
+#     "command": "ls -la"
+#   }
+# }
+
+TOOLS: list[ToolParam] = [
+    {  # 定义工具列表
+        "name": "bash",  # 工具名称：模型在调用时会返回这个名字
+        "description": "Run a shell command.",  # 工具描述：非常重要！模型通过理解这句话来决定“何时”使用这个工具
+        "input_schema": {  #  参数格式（JSON Schema 标准）
+            "type": "object",  # 规定参数是一个对象
+            "properties": {"command": {"type": "string"}},  # 规定参数名是 command，类型是字符串
+            "required": ["command"],  # 规定 command 参数是必填的
+        },
+    }
+]
 
 
 def run_bash(command: str) -> str:
@@ -92,7 +115,7 @@ def agent_loop(messages: list):
         for block in response.content:
             if block.type == "tool_use":
                 print(f"\033[33m$ {block.input['command']}\033[0m")
-                output = run_bash(block.input["command"])
+                output = run_bash(str(block.input["command"]))
                 print(output[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id,
                                 "content": output})
@@ -106,6 +129,7 @@ if __name__ == "__main__":
             query = input("\033[36ms01 >> \033[0m")
         except (EOFError, KeyboardInterrupt):
             break
+        # Exit on empty input, "q", or "exit"
         if query.strip().lower() in ("q", "exit", ""):
             break
         history.append({"role": "user", "content": query})
